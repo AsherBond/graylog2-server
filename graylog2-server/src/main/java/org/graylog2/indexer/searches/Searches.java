@@ -1,5 +1,5 @@
-/**
- * Copyright 2013 Lennart Koopmann <lennart@socketfeed.com>
+/*
+ * Copyright 2012-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -15,11 +15,12 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 
 package org.graylog2.indexer.searches;
 
+import com.google.inject.assistedinject.Assisted;
+import com.google.inject.assistedinject.AssistedInject;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchRequestBuilder;
 import org.elasticsearch.action.search.SearchResponse;
@@ -37,9 +38,11 @@ import org.elasticsearch.search.facet.statistical.StatisticalFacetBuilder;
 import org.elasticsearch.search.facet.terms.TermsFacet;
 import org.elasticsearch.search.facet.terms.TermsFacetBuilder;
 import org.elasticsearch.search.sort.SortOrder;
-import org.graylog2.Core;
+import org.graylog2.Configuration;
+import org.graylog2.indexer.Deflector;
 import org.graylog2.indexer.IndexHelper;
 import org.graylog2.indexer.Indexer;
+import org.graylog2.indexer.ranges.IndexRangeService;
 import org.graylog2.indexer.results.*;
 import org.graylog2.indexer.searches.timeranges.TimeRange;
 import org.slf4j.Logger;
@@ -59,7 +62,15 @@ import static org.elasticsearch.index.query.QueryBuilders.queryString;
 public class Searches {
     private static final Logger log = LoggerFactory.getLogger(Searches.class);
 
-    private final Core server;
+    public interface Factory {
+        Searches create(Client client);
+    }
+
+
+    private final Configuration configuration;
+    private final Indexer indexer;
+    private final Deflector deflector;
+    private final IndexRangeService indexRangeService;
 	private final Client c;
 
     private final static int LIMIT = 150;
@@ -67,9 +78,17 @@ public class Searches {
     private final static String TERMS_FACET_NAME = "gl2_terms";
     private final static String STATS_FACET_NAME = "gl2_stats";
 
-    public Searches(Client client, Core server) {
-		this.server = server;
-		this.c = client;
+    @AssistedInject
+    public Searches(Configuration configuration,
+                    Indexer indexer,
+                    Deflector deflector,
+                    IndexRangeService indexRangeService,
+                    @Assisted Client client) {
+        this.configuration = configuration;
+        this.indexer = indexer;
+        this.deflector = deflector;
+        this.indexRangeService = indexRangeService;
+        this.c = client;
 	}
 
     public CountResult count(String query, TimeRange range) throws IndexHelper.InvalidRangeFormatException {
@@ -77,7 +96,7 @@ public class Searches {
     }
 
     public CountResult count(String query, TimeRange range, String filter) throws IndexHelper.InvalidRangeFormatException {
-        Set<String> indices = IndexHelper.determineAffectedIndices(server, range);
+        Set<String> indices = IndexHelper.determineAffectedIndices(indexer, indexRangeService, deflector, range);
 
         SearchRequest request;
         if (filter == null) {
@@ -92,7 +111,7 @@ public class Searches {
     }
 
     public ScrollResult scroll(String query, TimeRange range, int limit, int offset, List<String> fields, String filter) throws IndexHelper.InvalidRangeFormatException {
-        final Set<String> indices = IndexHelper.determineAffectedIndices(server, range);
+        final Set<String> indices = IndexHelper.determineAffectedIndices(indexer, indexRangeService, deflector, range);
         final SearchRequestBuilder srb = standardSearchRequest(query, indices, limit, offset, range, null, false);
         if (range != null && filter != null) {
             srb.setPostFilter(standardFilters(range, filter));
@@ -125,7 +144,7 @@ public class Searches {
             limit = LIMIT;
         }
 
-        Set<String> indices = IndexHelper.determineAffectedIndices(server, range);
+        Set<String> indices = IndexHelper.determineAffectedIndices(indexer, indexRangeService, deflector, range);
 
         SearchRequest request;
 
@@ -151,9 +170,9 @@ public class Searches {
 
         SearchRequestBuilder srb;
         if (filter == null) {
-            srb = standardSearchRequest(query, IndexHelper.determineAffectedIndices(server, range));
+            srb = standardSearchRequest(query, IndexHelper.determineAffectedIndices(indexer, indexRangeService, deflector, range));
         } else {
-            srb = filteredSearchRequest(query, filter, IndexHelper.determineAffectedIndices(server, range));
+            srb = filteredSearchRequest(query, filter, IndexHelper.determineAffectedIndices(indexer, indexRangeService, deflector, range));
         }
 
         TermsFacetBuilder terms = new TermsFacetBuilder(TERMS_FACET_NAME);
@@ -188,9 +207,9 @@ public class Searches {
         SearchRequestBuilder srb;
 
         if (filter == null) {
-            srb = standardSearchRequest(query, IndexHelper.determineAffectedIndices(server, range));
+            srb = standardSearchRequest(query, IndexHelper.determineAffectedIndices(indexer, indexRangeService, deflector, range));
         } else {
-            srb = filteredSearchRequest(query, filter, IndexHelper.determineAffectedIndices(server, range));
+            srb = filteredSearchRequest(query, filter, IndexHelper.determineAffectedIndices(indexer, indexRangeService, deflector, range));
         }
 
         StatisticalFacetBuilder stats = new StatisticalFacetBuilder(STATS_FACET_NAME);
@@ -232,10 +251,10 @@ public class Searches {
         fb.facetFilter(standardFilters(range, filter));
 
         QueryStringQueryBuilder qs = queryString(query);
-        qs.allowLeadingWildcard(server.getConfiguration().isAllowLeadingWildcardSearches());
+        qs.allowLeadingWildcard(configuration.isAllowLeadingWildcardSearches());
 
         SearchRequestBuilder srb = c.prepareSearch();
-		srb.setIndices(IndexHelper.determineAffectedIndices(server, range).toArray(new String[]{}));
+		srb.setIndices(IndexHelper.determineAffectedIndices(indexer, indexRangeService, deflector, range).toArray(new String[]{}));
 		srb.setQuery(qs);
 		srb.addFacet(fb);
 
@@ -255,10 +274,10 @@ public class Searches {
         fb.facetFilter(standardFilters(range, filter));
 
         QueryStringQueryBuilder qs = queryString(query);
-        qs.allowLeadingWildcard(server.getConfiguration().isAllowLeadingWildcardSearches());
+        qs.allowLeadingWildcard(configuration.isAllowLeadingWildcardSearches());
 
         SearchRequestBuilder srb = c.prepareSearch();
-        srb.setIndices(IndexHelper.determineAffectedIndices(server, range).toArray(new String[]{}));
+        srb.setIndices(IndexHelper.determineAffectedIndices(indexer, indexRangeService, deflector, range).toArray(new String[]{}));
         srb.setQuery(qs);
         srb.addFacet(fb);
 
@@ -318,7 +337,7 @@ public class Searches {
             srb.setQuery(matchAllQuery());
         } else {
             QueryStringQueryBuilder qs = queryString(query);
-            qs.allowLeadingWildcard(server.getConfiguration().isAllowLeadingWildcardSearches());
+            qs.allowLeadingWildcard(configuration.isAllowLeadingWildcardSearches());
             srb.setQuery(qs);
         }
 
@@ -336,7 +355,7 @@ public class Searches {
             srb.addSort(sort.getField(), sort.asElastic());
         }
 
-        if (highlight && server.getConfiguration().isAllowHighlighting()) {
+        if (highlight && configuration.isAllowHighlighting()) {
             srb.setHighlighterRequireFieldMatch(false);
             srb.addHighlightedField("*", 0, 0);
         }

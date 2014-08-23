@@ -1,4 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ~ Copyright 2012-2014 TORCH GmbH
+  ~
+  ~ This file is part of Graylog2.
+  ~
+  ~ Graylog2 is free software: you can redistribute it and/or modify
+  ~ it under the terms of the GNU General Public License as published by
+  ~ the Free Software Foundation, either version 3 of the License, or
+  ~ (at your option) any later version.
+  ~
+  ~ Graylog2 is distributed in the hope that it will be useful,
+  ~ but WITHOUT ANY WARRANTY; without even the implied warranty of
+  ~ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  ~ GNU General Public License for more details.
+  ~
+  ~ You should have received a copy of the GNU General Public License
+  ~ along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
+  -->
+
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <prerequisites>
@@ -7,7 +26,11 @@
 
     <groupId>org.graylog2</groupId>
     <artifactId>graylog2-parent</artifactId>
+<<<<<<< HEAD
     <version>0.20.2</version>
+=======
+    <version>0.21.0-SNAPSHOT</version>
+>>>>>>> 84813ab619e8dba994e3cdc5b4eafd3ae75c908e
     <packaging>pom</packaging>
     <name>graylog2</name>
     <url>http://graylog2.org/</url>
@@ -20,6 +43,7 @@
 
     <modules>
         <module>graylog2-plugin-interfaces</module>
+        <module>graylog2-shared</module>
         <module>graylog2-server</module>
         <module>graylog2-inputs</module>
         <module>graylog2-radio</module>
@@ -58,6 +82,7 @@
         <jersey.version>2.5</jersey.version>
         <apache-directory-version>1.0.0-M20</apache-directory-version>
         <surefire.version>2.13</surefire.version>
+        <guice.version>3.0</guice.version>
     </properties>
 
     <repositories>
@@ -214,7 +239,7 @@
         <dependency>
             <groupId>com.github.joschi</groupId>
             <artifactId>jadconfig</artifactId>
-            <version>0.4</version>
+            <version>0.5.0</version>
         </dependency>
         <dependency>
             <groupId>org.glassfish.jersey.core</groupId>
@@ -268,6 +293,24 @@
             <artifactId>msgpack</artifactId>
             <version>0.6.8</version>
         </dependency>
+<<<<<<< HEAD
+=======
+        <dependency>
+            <groupId>com.google.inject</groupId>
+            <artifactId>guice</artifactId>
+            <version>${guice.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.inject.extensions</groupId>
+            <artifactId>guice-assistedinject</artifactId>
+            <version>${guice.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.inject.extensions</groupId>
+            <artifactId>guice-multibindings</artifactId>
+            <version>${guice.version}</version>
+        </dependency>
+>>>>>>> 84813ab619e8dba994e3cdc5b4eafd3ae75c908e
     </dependencies>
 
     <build>

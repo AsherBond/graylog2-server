@@ -24,6 +24,7 @@ import com.github.joschi.jadconfig.validators.InetPortValidator;
 import com.github.joschi.jadconfig.validators.PositiveIntegerValidator;
 import com.lmax.disruptor.*;
 import org.graylog2.plugin.Tools;
+import org.graylog2.shared.BaseConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,7 +33,7 @@ import java.net.URI;
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
  */
-public class Configuration {
+public class Configuration extends BaseConfiguration {
 
     private static final Logger LOG = LoggerFactory.getLogger(Configuration.class);
 
@@ -82,18 +83,11 @@ public class Configuration {
     @Parameter(value = "amqp_broker_password", required = false)
     private String amqpPassword;
 
-    @Parameter(value = "amqp_broker_vhost", required = false)
-    private String amqpVhost = "/";
+    @Parameter(value = "amqp_prefetch_count", required = false, validator = PositiveIntegerValidator.class)
+    private int amqpPrefetchCount = 0;
 
     @Parameter(value = "ring_size", required = true, validator = PositiveIntegerValidator.class)
     private int ringSize = 1024;
-
-    @Parameter(value = "processbuffer_processors", required = true, validator = PositiveIntegerValidator.class)
-    private int processBufferProcessors = 5;
-
-    @Parameter(value = "processor_wait_strategy", required = true)
-    private String processorWaitStrategy = "blocking";
-
 
     public String getNodeIdFile() {
         return nodeIdFile;
@@ -111,14 +105,6 @@ public class Configuration {
         return Tools.getUriStandard(restListenUri);
     }
 
-    public URI getRestTransportUri() {
-        if (restTransportUri == null || restTransportUri.isEmpty()) {
-            return null;
-        }
-
-        return Tools.getUriStandard(restTransportUri);
-    }
-
     public URI getGraylog2ServerUri() {
         if (graylog2ServerUri == null || graylog2ServerUri.isEmpty()) {
             return null;
@@ -127,38 +113,8 @@ public class Configuration {
         return Tools.getUriStandard(graylog2ServerUri);
     }
 
-    public void setRestTransportUri(String restTransportUri) {
-        this.restTransportUri = restTransportUri;
-    }
-
     public int getRingSize() {
         return ringSize;
-    }
-
-    public WaitStrategy getProcessorWaitStrategy() {
-        if (processorWaitStrategy.equals("sleeping")) {
-            return new SleepingWaitStrategy();
-        }
-
-        if (processorWaitStrategy.equals("yielding")) {
-            return new YieldingWaitStrategy();
-        }
-
-        if (processorWaitStrategy.equals("blocking")) {
-            return new BlockingWaitStrategy();
-        }
-
-        if (processorWaitStrategy.equals("busy_spinning")) {
-            return new BusySpinWaitStrategy();
-        }
-
-        LOG.warn("Invalid setting for [processor_wait_strategy]:"
-                + " Falling back to default: BlockingWaitStrategy.");
-        return new BlockingWaitStrategy();
-    }
-
-    public int getProcessBufferProcessors() {
-        return processBufferProcessors;
     }
 
     public String getKafkaBrokers() {
@@ -189,16 +145,16 @@ public class Configuration {
         return amqpUsername;
     }
 
-    public String getAmqpVirtualHost() {
-        return amqpVhost;
-    }
-
     public int getAmqpPort() {
         return amqpPort;
     }
 
     public String getAmqpHostname() {
         return amqpHostname;
+    }
+
+    public int getAmqpPrefetchCount() {
+        return amqpPrefetchCount;
     }
 
 }

@@ -20,10 +20,9 @@
 package org.graylog2.inputs.amqp;
 
 import com.rabbitmq.client.*;
-import org.graylog2.plugin.GraylogServer;
-import org.graylog2.plugin.InputHost;
 import org.graylog2.plugin.Message;
 import org.graylog2.plugin.RadioMessage;
+import org.graylog2.plugin.buffers.Buffer;
 import org.graylog2.plugin.inputs.MessageInput;
 import org.joda.time.DateTime;
 import org.msgpack.MessagePack;
@@ -47,7 +46,6 @@ public class Consumer {
 
     private final String hostname;
     private final int port;
-    private final String virtualHost;
     private final String username;
     private final String password;
     private final int prefetchCount;
@@ -56,24 +54,21 @@ public class Consumer {
     private final String exchange;
     private final String routingKey;
 
-    private boolean stopped = false;
-
     private Connection connection;
     private Channel channel;
 
-    private final InputHost graylogServer;
+    private final Buffer processBuffer;
     private final MessageInput sourceInput;
 
     private AtomicLong totalBytesRead = new AtomicLong(0);
     private AtomicLong lastSecBytesRead = new AtomicLong(0);
     private AtomicLong lastSecBytesReadTmp = new AtomicLong(0);
 
-    public Consumer(String hostname, int port, String virtualHost, String username, String password,
+    public Consumer(String hostname, int port, String username, String password,
                     int prefetchCount, String queue, String exchange, String routingKey,
-                    InputHost graylogServer, MessageInput sourceInput) {
+                    Buffer processBuffer, MessageInput sourceInput) {
         this.hostname = hostname;
         this.port = port;
-        this.virtualHost = virtualHost;
         this.username = username;
         this.password = password;
         this.prefetchCount = prefetchCount;
@@ -81,8 +76,8 @@ public class Consumer {
         this.queue = queue;
         this.exchange = exchange;
         this.routingKey = routingKey;
+        this.processBuffer = processBuffer;
 
-        this.graylogServer = graylogServer;
         this.sourceInput = sourceInput;
 
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
@@ -128,7 +123,7 @@ public class Consumer {
                         event.addLongFields(msg.longs);
                         event.addDoubleFields(msg.doubles);
 
-                        graylogServer.getProcessBuffer().insertCached(event, sourceInput);
+                        processBuffer.insertCached(event, sourceInput);
 
                     } catch (Exception e) {
                         LOG.error("Error while trying to process AMQP message.", e);
@@ -144,8 +139,6 @@ public class Consumer {
         ConnectionFactory factory = new ConnectionFactory();
         factory.setHost(hostname);
         factory.setPort(port);
-
-        factory.setVirtualHost(virtualHost);
 
         // Authenticate?
         if(username != null && !username.isEmpty() && password != null && !password.isEmpty()) {
@@ -165,7 +158,7 @@ public class Consumer {
         connection.addShutdownListener(new ShutdownListener() {
             @Override
             public void shutdownCompleted(ShutdownSignalException cause) {
-                while (!stopped) {
+                while (true) {
                     try {
                         LOG.error("AMQP connection lost! Trying reconnect in 1 second.");
 
@@ -190,8 +183,6 @@ public class Consumer {
 
 
     public void stop() throws IOException {
-        this.stopped = true; // Disables reconnector.
-
         if (channel != null && channel.isOpen()) {
             channel.close();
         }

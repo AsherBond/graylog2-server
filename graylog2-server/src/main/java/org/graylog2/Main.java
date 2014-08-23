@@ -1,5 +1,5 @@
-/**
- * Copyright 2010, 2011, 2012 Lennart Koopmann <lennart@socketfeed.com>
+/*
+ * Copyright 2012-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -15,7 +15,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 
 package org.graylog2;
@@ -28,8 +27,14 @@ import com.github.joschi.jadconfig.JadConfig;
 import com.github.joschi.jadconfig.RepositoryException;
 import com.github.joschi.jadconfig.ValidationException;
 import com.github.joschi.jadconfig.repositories.PropertiesRepository;
-import org.apache.commons.io.IOUtils;
+import com.google.common.collect.Lists;
+import com.google.common.util.concurrent.MoreExecutors;
+import com.google.common.util.concurrent.ServiceManager;
+import com.google.inject.Guice;
+import com.google.inject.Injector;
+import com.google.inject.Module;
 import org.apache.log4j.Level;
+<<<<<<< HEAD
 import org.graylog2.cluster.Node;
 import org.graylog2.cluster.NodeNotFoundException;
 import org.graylog2.filters.*;
@@ -51,25 +56,43 @@ import org.graylog2.inputs.syslog.udp.SyslogUDPInput;
 import org.graylog2.outputs.BatchedElasticSearchOutput;
 import org.graylog2.plugin.lifecycles.Lifecycle;
 import org.graylog2.notifications.Notification;
+=======
+import org.graylog2.bindings.*;
+import org.graylog2.cluster.NodeService;
+import org.graylog2.cluster.NodeServiceImpl;
+import org.graylog2.notifications.Notification;
+import org.graylog2.notifications.NotificationImpl;
+import org.graylog2.notifications.NotificationService;
+import org.graylog2.outputs.BatchedElasticSearchOutput;
+import org.graylog2.outputs.ElasticSearchOutput;
+import org.graylog2.outputs.OutputRegistry;
+import org.graylog2.plugin.Plugin;
+import org.graylog2.plugin.PluginModule;
+>>>>>>> 84813ab619e8dba994e3cdc5b4eafd3ae75c908e
 import org.graylog2.plugin.Tools;
-import org.graylog2.plugin.initializers.InitializerConfigurationException;
 import org.graylog2.plugin.inputs.MessageInput;
+import org.graylog2.plugin.lifecycles.Lifecycle;
 import org.graylog2.plugins.PluginInstaller;
+import org.graylog2.shared.NodeRunner;
+import org.graylog2.shared.ServerStatus;
+import org.graylog2.shared.bindings.GuiceInstantiationService;
+import org.graylog2.shared.initializers.ServiceManagerListener;
+import org.graylog2.shared.plugins.PluginLoader;
 import org.graylog2.system.activities.Activity;
+import org.graylog2.system.activities.ActivityWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.bridge.SLF4JBridgeHandler;
 
 import java.io.File;
-import java.io.FileWriter;
-import java.io.Writer;
+import java.util.List;
 
 /**
  * Main class of Graylog2.
  *
  * @author Lennart Koopmann <lennart@socketfeed.com>
  */
-public final class Main {
+public final class Main extends NodeRunner {
 
     private static final Logger LOG = LoggerFactory.getLogger(Main.class);
 
@@ -90,7 +113,7 @@ public final class Main {
         }
 
         if (commandLineArguments.isShowVersion()) {
-            System.out.println("Graylog2 Server " + Core.GRAYLOG2_VERSION);
+            System.out.println("Graylog2 Server " + ServerVersion.VERSION);
             System.out.println("JRE: " + Tools.getSystemInformation());
             System.exit(0);
         }
@@ -98,25 +121,13 @@ public final class Main {
         String configFile = commandLineArguments.getConfigFile();
         LOG.info("Using config file: {}", configFile);
 
-        final Configuration configuration = new Configuration();
-        JadConfig jadConfig = new JadConfig(new PropertiesRepository(configFile), configuration);
-
-        LOG.info("Loading configuration");
-        try {
-            jadConfig.process();
-        } catch (RepositoryException e) {
-            LOG.error("Couldn't load configuration file: [{}]", configFile, e);
-            System.exit(1);
-        } catch (ValidationException e) {
-            LOG.error("Invalid configuration", e);
-            System.exit(1);
-        }
+        final Configuration configuration = getConfiguration(configFile);
 
         if (configuration.getPasswordSecret().isEmpty()) {
             LOG.error("No password secret set. Please define password_secret in your graylog2.conf.");
             System.exit(1);
         }
-        
+
         if (commandLineArguments.isInstallPlugin()) {
             System.out.println("Plugin installation requested.");
             PluginInstaller installer = new PluginInstaller(
@@ -135,9 +146,31 @@ public final class Main {
             LOG.info("Running in Debug mode");
             logLevel = Level.DEBUG;
         }
+        org.apache.log4j.Logger.getRootLogger().setLevel(logLevel);
+        org.apache.log4j.Logger.getLogger(Main.class.getPackage().getName()).setLevel(logLevel);
+
+        PluginLoader pluginLoader = new PluginLoader(new File(configuration.getPluginDir()));
+        List<PluginModule> pluginModules = Lists.newArrayList();
+        for (Plugin plugin : pluginLoader.loadPlugins())
+            pluginModules.addAll(plugin.modules());
+
+        LOG.debug("Loaded modules: " + pluginModules);
+
+        GuiceInstantiationService instantiationService = new GuiceInstantiationService();
+        List<Module> bindingsModules = getBindingsModules(instantiationService,
+                new ServerBindings(configuration),
+                new PersistenceServicesBindings(),
+                new ServerMessageInputBindings(),
+                new MessageFilterBindings(),
+                new AlarmCallbackBindings(),
+                new InitializerBindings());
+        LOG.debug("Adding plugin modules: " + pluginModules);
+        bindingsModules.addAll(pluginModules);
+        Injector injector = Guice.createInjector(bindingsModules);
+        instantiationService.setInjector(injector);
 
         // This is holding all our metrics.
-        final MetricRegistry metrics = new MetricRegistry();
+        final MetricRegistry metrics = injector.getInstance(MetricRegistry.class);
 
         // Report metrics via JMX.
         final JmxReporter reporter = JmxReporter.forRegistry(metrics).build();
@@ -145,68 +178,64 @@ public final class Main {
 
         InstrumentedAppender logMetrics = new InstrumentedAppender(metrics);
         logMetrics.activateOptions();
-        org.apache.log4j.Logger.getRootLogger().setLevel(logLevel);
-        org.apache.log4j.Logger.getLogger(Main.class.getPackage().getName()).setLevel(logLevel);
         org.apache.log4j.Logger.getRootLogger().addAppender(logMetrics);
 
         SLF4JBridgeHandler.removeHandlersForRootLogger();
         SLF4JBridgeHandler.install();
 
-        LOG.info("Graylog2 {} starting up. (JRE: {})", Core.GRAYLOG2_VERSION, Tools.getSystemInformation());
-
-        // If we only want to check our configuration, we just initialize the rules engine to check if the rules compile
-        if (commandLineArguments.isConfigTest()) {
-            Core server = new Core();
-            server.setConfiguration(configuration);
-            DroolsInitializer drools = new DroolsInitializer();
-            try {
-                drools.initialize(server, null);
-            } catch (InitializerConfigurationException e) {
-                LOG.error("Drools initialization failed.", e);
-            }
-            // rules have been checked, exit gracefully
-            System.exit(0);
-        }
+        LOG.info("Graylog2 {} starting up. (JRE: {})", ServerVersion.VERSION, Tools.getSystemInformation());
 
         // Do not use a PID file if the user requested not to
         if (!commandLineArguments.isNoPidFile()) {
             savePidFile(commandLineArguments.getPidFile());
         }
 
-        // Le server object. This is where all the magic happens.
-        Core server = new Core();
-        server.setLifecycle(Lifecycle.STARTING);
+        monkeyPatchHK2(injector);
 
-        server.initialize(configuration, metrics);
+        // Le server object. This is where all the magic happens.
+        final ServerStatus serverStatus = injector.getInstance(ServerStatus.class);
+        serverStatus.setLifecycle(Lifecycle.STARTING);
+
+        final ActivityWriter activityWriter = injector.getInstance(ActivityWriter.class);
+        final ServiceManager serviceManager = injector.getInstance(ServiceManager.class);
+
+        Runtime.getRuntime().addShutdownHook(new Thread() {
+            @Override
+            public void run() {
+                String msg = "SIGNAL received. Shutting down.";
+                LOG.info(msg);
+                activityWriter.write(new Activity(msg, Main.class));
+
+                serverStatus.setLifecycle(Lifecycle.HALTING);
+
+                serviceManager.stopAsync().awaitStopped();
+            }
+        });
 
         // Register this node.
-        Node.registerServer(server, configuration.isMaster(), configuration.getRestTransportUri());
+        final NodeService nodeService = injector.getInstance(NodeService.class);
+        nodeService.registerServer(serverStatus.getNodeId().toString(), configuration.isMaster(), configuration.getRestTransportUri());
 
-        Node thisNode = null;
-        try {
-            thisNode = Node.thisNode(server);
-        } catch (NodeNotFoundException e) {
-            throw new RuntimeException("Did not find own node. This should never happen.", e);
-        }
-        if (configuration.isMaster() && !thisNode.isOnlyMaster()) {
+        if (configuration.isMaster() && !nodeService.isOnlyMaster(serverStatus.getNodeId())) {
             LOG.warn("Detected another master in the cluster. Retrying in {} seconds to make sure it is not "
-                    + "an old stale instance.", Node.PING_TIMEOUT);
+                    + "an old stale instance.", NodeServiceImpl.PING_TIMEOUT);
             try {
-                Thread.sleep(Node.PING_TIMEOUT*1000);
+                Thread.sleep(NodeServiceImpl.PING_TIMEOUT*1000);
             } catch (InterruptedException e) { /* nope */ }
             
-            if (!thisNode.isOnlyMaster()) {
+            if (!nodeService.isOnlyMaster(serverStatus.getNodeId())) {
                 // All devils here.
                 String what = "Detected other master node in the cluster! Starting as non-master! "
                         + "This is a mis-configuration you should fix.";
                 LOG.warn(what);
-                server.getActivityWriter().write(new Activity(what, Main.class));
+                activityWriter.write(new Activity(what, Main.class));
 
                 // Write a notification.
-                Notification.buildNow(server)
+                final NotificationService notificationService = injector.getInstance(NotificationService.class);
+                Notification notification = notificationService.buildNow()
                         .addType(Notification.Type.MULTI_MASTER)
-                        .addSeverity(Notification.Severity.URGENT)
-                        .publishIfFirst();
+                        .addSeverity(Notification.Severity.URGENT);
+                notificationService.publishIfFirst(notification);
 
                 configuration.setIsMaster(false);
             } else {
@@ -218,13 +247,13 @@ public final class Main {
         if (commandLineArguments.isLocal() || commandLineArguments.isDebug()) {
             // In local mode, systemstats are sent to localhost for example.
             LOG.info("Running in local mode");
-            server.setLocalMode(true);
+            serverStatus.setLocalMode(true);
         }
 
         // Are we in stats mode?
         if (commandLineArguments.isStats()) {
             LOG.info("Printing system utilization information.");
-            server.setStatsMode(true);
+            serverStatus.setStatsMode(true);
         }
 
 
@@ -235,50 +264,20 @@ public final class Main {
         // propagate default size to input plugins
         MessageInput.setDefaultRecvBufferSize(configuration.getUdpRecvBufferSizes());
 
-        // Register standard inputs.
-        server.inputs().register(SyslogUDPInput.class, SyslogUDPInput.NAME);
-        server.inputs().register(SyslogTCPInput.class, SyslogTCPInput.NAME);
-        server.inputs().register(RawUDPInput.class, RawUDPInput.NAME);
-        server.inputs().register(RawTCPInput.class, RawTCPInput.NAME);
-        server.inputs().register(GELFUDPInput.class, GELFUDPInput.NAME);
-        server.inputs().register(GELFTCPInput.class, GELFTCPInput.NAME);
-        server.inputs().register(GELFHttpInput.class, GELFHttpInput.NAME);
-        server.inputs().register(FakeHttpMessageInput.class, FakeHttpMessageInput.NAME);
-        server.inputs().register(LocalMetricsInput.class, LocalMetricsInput.NAME);
-        server.inputs().register(JsonPathInput.class, JsonPathInput.NAME);
-        server.inputs().register(KafkaInput.class, KafkaInput.NAME);
-        server.inputs().register(RadioKafkaInput.class, RadioKafkaInput.NAME);
-        server.inputs().register(AMQPInput.class, AMQPInput.NAME);
-        server.inputs().register(RadioAMQPInput.class, RadioAMQPInput.NAME);
-
-        // Register initializers.
-        server.initializers().register(new DroolsInitializer());
-        server.initializers().register(new PeriodicalsInitializer());
-
-        // Register message filters. (Order is important here)
-        server.registerFilter(new StaticFieldFilter());
-        server.registerFilter(new ExtractorFilter());
-        server.registerFilter(new BlacklistFilter());
-        server.registerFilter(new StreamMatcherFilter());
-        server.registerFilter(new RewriteFilter());
-
         // Register outputs.
+<<<<<<< HEAD
         server.outputs().register(new BatchedElasticSearchOutput(server));
+=======
+        final OutputRegistry outputRegistry = injector.getInstance(OutputRegistry.class);
+        outputRegistry.register(injector.getInstance(BatchedElasticSearchOutput.class));
+>>>>>>> 84813ab619e8dba994e3cdc5b4eafd3ae75c908e
 
         // Start services.
-        server.run();
+        final ServiceManagerListener serviceManagerListener = injector.getInstance(ServiceManagerListener.class);
+        serviceManager.addListener(serviceManagerListener, MoreExecutors.sameThreadExecutor());
+        serviceManager.startAsync().awaitHealthy();
 
-        // Start REST API.
-        try {
-            server.startRestApi();
-        } catch(Exception e) {
-            LOG.error("Could not start REST API on <{}>. Terminating.", configuration.getRestListenUri(), e);
-            System.exit(1);
-        }
-
-        server.setLifecycle(Lifecycle.RUNNING);
-
-        server.getActivityWriter().write(new Activity("Started up.", Main.class));
+        activityWriter.write(new Activity("Started up.", Main.class));
         LOG.info("Graylog2 up and running.");
 
         // Block forever.
@@ -291,26 +290,26 @@ public final class Main {
         }
     }
 
-    private static void savePidFile(String pidFile) {
+    private static Configuration getConfiguration(String configFile) {
+        final Configuration configuration = new Configuration();
+        JadConfig jadConfig = new JadConfig(new PropertiesRepository(configFile), configuration);
 
-        String pid = Tools.getPID();
-        Writer pidFileWriter = null;
-
+        LOG.info("Loading configuration");
         try {
-            if (pid == null || pid.isEmpty() || pid.equals("unknown")) {
-                throw new Exception("Could not determine PID.");
-            }
-
-            pidFileWriter = new FileWriter(pidFile);
-            IOUtils.write(pid, pidFileWriter);
-        } catch (Exception e) {
-            LOG.error("Could not write PID file: " + e.getMessage(), e);
+            jadConfig.process();
+        } catch (RepositoryException e) {
+            LOG.error("Couldn't load configuration file: [{}]", configFile, e);
             System.exit(1);
-        } finally {
-            IOUtils.closeQuietly(pidFileWriter);
-            // make sure to remove our pid when we exit
-            new File(pidFile).deleteOnExit();
+        } catch (ValidationException e) {
+            LOG.error("Invalid configuration", e);
+            System.exit(1);
         }
-    }
 
+        if (configuration.getRestTransportUri() == null) {
+            configuration.setRestTransportUri(configuration.getDefaultRestTransportUri().toString());
+            LOG.info("No rest_transport_uri set. Falling back to [{}].", configuration.getRestTransportUri());
+        }
+
+        return configuration;
+    }
 }

@@ -1,5 +1,5 @@
-/**
- * Copyright 2012 Kay Roepke <kroepke@googlemail.com>
+/*
+ * Copyright 2012-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -15,12 +15,12 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.inputs.gelf.http;
 
+import com.codahale.metrics.MetricRegistry;
 import org.graylog2.inputs.network.PacketInformationDumper;
-import org.graylog2.plugin.InputHost;
+import org.graylog2.plugin.buffers.Buffer;
 import org.graylog2.plugin.inputs.MessageInput;
 import org.graylog2.plugin.inputs.util.ConnectionCounter;
 import org.graylog2.plugin.inputs.util.ThroughputCounter;
@@ -33,13 +33,19 @@ import org.jboss.netty.handler.codec.http.HttpResponseEncoder;
 
 public class GELFHttpPipelineFactory implements ChannelPipelineFactory {
 
-    private final InputHost graylogServer;
+    private final MetricRegistry metricRegistry;
+    private final Buffer processBuffer;
     private final MessageInput sourceInput;
     private final ThroughputCounter throughputCounter;
     private final ConnectionCounter connectionCounter;
 
-    public GELFHttpPipelineFactory(InputHost graylogServer, MessageInput sourceInput, ThroughputCounter throughputCounter, ConnectionCounter connectionCounter) {
-        this.graylogServer = graylogServer;
+    public GELFHttpPipelineFactory(MetricRegistry metricRegistry,
+                                   Buffer processBuffer,
+                                   MessageInput sourceInput,
+                                   ThroughputCounter throughputCounter,
+                                   ConnectionCounter connectionCounter) {
+        this.metricRegistry = metricRegistry;
+        this.processBuffer = processBuffer;
         this.sourceInput = sourceInput;
         this.throughputCounter = throughputCounter;
         this.connectionCounter = connectionCounter;
@@ -58,7 +64,7 @@ public class GELFHttpPipelineFactory implements ChannelPipelineFactory {
         // only add support for incoming compressed messages, we don't return much (if any) data to the client.
         pipeline.addLast("decompressor", new HttpContentDecompressor());
 
-        pipeline.addLast("handler", new GELFHttpHandler(graylogServer, sourceInput));
+        pipeline.addLast("handler", new GELFHttpHandler(metricRegistry, processBuffer, sourceInput));
 
         return pipeline;
     }

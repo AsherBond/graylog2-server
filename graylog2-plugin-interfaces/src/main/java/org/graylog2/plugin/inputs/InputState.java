@@ -1,8 +1,26 @@
+/*
+ * Copyright 2012-2014 TORCH GmbH
+ *
+ * This file is part of Graylog2.
+ *
+ * Graylog2 is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Graylog2 is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 package org.graylog2.plugin.inputs;
 
 import com.google.common.collect.Maps;
 import org.graylog2.plugin.Tools;
-import org.graylog2.plugin.inputs.MessageInput;
 import org.joda.time.DateTime;
 
 import java.util.Map;
@@ -15,16 +33,18 @@ public class InputState {
     public enum InputStateType {
         CREATED,
         INITIALIZED,
+        INVALID_CONFIGURATION,
         STARTING,
         RUNNING,
         FAILED,
-        STOPPED
+        STOPPED,
+        TERMINATED
     }
 
     protected MessageInput messageInput;
     protected String id;
     protected InputStateType state;
-    protected String startedAt;
+    protected DateTime startedAt;
     protected String detailedMessage;
 
     public InputState(MessageInput input) {
@@ -43,7 +63,7 @@ public class InputState {
         this.state = state;
         this.messageInput = input;
         this.id = id;
-        this.startedAt = Tools.getISO8601String(DateTime.now());
+        this.startedAt = DateTime.now();
     }
 
 
@@ -61,22 +81,32 @@ public class InputState {
 
     public void setState(InputStateType state) {
         this.state = state;
+        this.setDetailedMessage(null);
     }
 
-    public String getStartedAt() {
+    public DateTime getStartedAt() {
         return startedAt;
     }
 
-    public void setStartedAt(String startedAt) {
+    public void setStartedAt(DateTime startedAt) {
         this.startedAt = startedAt;
+    }
+
+    public String getDetailedMessage() {
+        return detailedMessage;
+    }
+
+    public void setDetailedMessage(String detailedMessage) {
+        this.detailedMessage = detailedMessage;
     }
 
     public Map<String, Object> asMap() {
         Map<String, Object> inputStateMap = Maps.newHashMap();
         inputStateMap.put("id", id);
         inputStateMap.put("state", state.toString().toLowerCase());
-        inputStateMap.put("started_at", startedAt);
+        inputStateMap.put("started_at", Tools.getISO8601String(startedAt));
         inputStateMap.put("message_input", messageInput.asMap());
+        inputStateMap.put("detailed_message", detailedMessage);
 
         return inputStateMap;
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2013 TORCH GmbH
+ * Copyright 2012-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -24,21 +24,25 @@ import org.apache.shiro.realm.AuthenticatingRealm;
 import org.apache.shiro.session.Session;
 import org.apache.shiro.subject.Subject;
 import org.apache.shiro.util.ThreadContext;
-import org.graylog2.Core;
 import org.graylog2.security.SessionIdToken;
 import org.graylog2.users.User;
+import org.graylog2.users.UserService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import javax.ws.rs.core.MultivaluedMap;
 
 public class SessionAuthenticator extends AuthenticatingRealm {
     private static final Logger log = LoggerFactory.getLogger(SessionAuthenticator.class);
 
-    private final Core core;
+    private final UserService userService;
+    private final LdapUserAuthenticator ldapAuthenticator;
 
-    public SessionAuthenticator(Core core) {
-        this.core = core;
+    @Inject
+    public SessionAuthenticator(UserService userService, LdapUserAuthenticator ldapAuthenticator) {
+        this.userService = userService;
+        this.ldapAuthenticator = ldapAuthenticator;
         // this realm either rejects a session, or allows the associated user implicitly
         setAuthenticationTokenClass(SessionIdToken.class);
         setCredentialsMatcher(new AllowAllCredentialsMatcher());
@@ -55,12 +59,12 @@ public class SessionAuthenticator extends AuthenticatingRealm {
         }
 
         final Object username = subject.getPrincipal();
-        final User user = User.load(String.valueOf(username), core);
+        final User user = userService.load(String.valueOf(username));
         if (user == null) {
             log.debug("No user named {} found for session {}", username, sessionIdToken.getSessionId());
             return null;
         }
-        if (user.isExternalUser() && !core.getLdapAuthenticator().isEnabled()) {
+        if (user.isExternalUser() && !ldapAuthenticator.isEnabled()) {
             throw new LockedAccountException("LDAP authentication is currently disabled.");
         }
 

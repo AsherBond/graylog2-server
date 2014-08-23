@@ -1,5 +1,5 @@
-/**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
+/*
+ * Copyright 2012-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -15,8 +15,8 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
+
 package org.graylog2.rest.resources.system;
 
 import com.codahale.metrics.annotation.Timed;
@@ -24,12 +24,15 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import org.graylog2.cluster.Node;
 import org.graylog2.cluster.NodeNotFoundException;
+import org.graylog2.cluster.NodeService;
 import org.graylog2.plugin.Tools;
+import org.graylog2.plugin.system.NodeId;
 import org.graylog2.rest.documentation.annotations.*;
 import org.graylog2.rest.resources.RestResource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 import java.util.List;
@@ -45,12 +48,22 @@ public class ClusterResource extends RestResource {
 
     private static final Logger LOG = LoggerFactory.getLogger(ClusterResource.class);
 
+    private final NodeService nodeService;
+    private final NodeId nodeId;
+
+    @Inject
+    public ClusterResource(NodeService nodeService,
+                           NodeId nodeId) {
+        this.nodeService = nodeService;
+        this.nodeId = nodeId;
+    }
+
     @GET @Timed
     @Path("/nodes")
     @ApiOperation(value = "List all active nodes in this cluster.")
     public String nodes() {
         List<Map<String, Object>> nodeList = Lists.newArrayList();
-        Map<String, Node> nodes = Node.allActive(core, Node.Type.SERVER);
+        Map<String, Node> nodes = nodeService.allActive(Node.Type.SERVER);
 
         for(Map.Entry<String, Node> e : nodes.entrySet()) {
             nodeList.add(nodeSummary(e.getValue()));
@@ -70,7 +83,7 @@ public class ClusterResource extends RestResource {
                     "Use the system API of the node itself to get system information.")
     public String node() {
         try {
-            return json(nodeSummary(Node.thisNode(core)));
+            return json(nodeSummary(nodeService.byNodeId(nodeId)));
         } catch (NodeNotFoundException e) {
             // this exception should never happen, if it does we have made it worksn't.(tm)
             throw new WebApplicationException(500);
@@ -92,9 +105,10 @@ public class ClusterResource extends RestResource {
             throw new WebApplicationException(400);
         }
 
-        Node node = Node.byNodeId(core, nodeId);
-
-        if (node == null) {
+        Node node = null;
+        try {
+            node = nodeService.byNodeId(nodeId);
+        } catch (NodeNotFoundException e) {
             LOG.error("Node <{}> not found.", nodeId);
             throw new WebApplicationException(404);
         }

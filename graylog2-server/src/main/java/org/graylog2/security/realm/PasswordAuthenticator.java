@@ -1,5 +1,5 @@
-/**
- * Copyright 2013 Kay Roepke <kay@torch.sh>
+/*
+ * Copyright 2012-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -15,27 +15,32 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.security.realm;
 
 import org.apache.shiro.authc.*;
 import org.apache.shiro.realm.AuthenticatingRealm;
 import org.apache.shiro.util.ByteSource;
-import org.graylog2.Core;
+import org.graylog2.Configuration;
 import org.graylog2.users.User;
+import org.graylog2.users.UserService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.inject.Inject;
 
 /**
  * @author Kay Roepke <kay@torch.sh>
  */
 public class PasswordAuthenticator extends AuthenticatingRealm {
     private static final Logger log = LoggerFactory.getLogger(PasswordAuthenticator.class);
-    private final Core core;
+    private final UserService userService;
+    private final Configuration configuration;
 
-    public PasswordAuthenticator(Core core) {
-        this.core = core;
+    @Inject
+    public PasswordAuthenticator(UserService userService, Configuration configuration) {
+        this.userService = userService;
+        this.configuration = configuration;
     }
 
     @Override
@@ -43,8 +48,8 @@ public class PasswordAuthenticator extends AuthenticatingRealm {
         UsernamePasswordToken token = (UsernamePasswordToken) authToken;
         log.debug("Retrieving authc info for user {}", token.getUsername());
 
-        final User user = User.load(token.getUsername(), core);
-        if (user instanceof User.LocalAdminUser || user == null) {
+        final User user = userService.load(token.getUsername());
+        if (user == null || user.isLocalAdmin()) {
             // skip the local admin user here, it's ugly, but for auth that user is treated specially.
             return null;
         }
@@ -59,7 +64,7 @@ public class PasswordAuthenticator extends AuthenticatingRealm {
         }
         return new SimpleAccount(token.getPrincipal(),
                 user.getHashedPassword(),
-                ByteSource.Util.bytes(core.getConfiguration().getPasswordSecret()),
+                ByteSource.Util.bytes(configuration.getPasswordSecret()),
                 "graylog2MongoDbRealm");
     }
 }

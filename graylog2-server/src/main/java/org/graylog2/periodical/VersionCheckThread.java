@@ -1,5 +1,5 @@
-/**
- * Copyright 2014 Lennart Koopmann <lennart@torch.sh>
+/*
+ * Copyright 2012-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -15,11 +15,12 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
+
 package org.graylog2.periodical;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.inject.Inject;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.commons.io.IOUtils;
 import org.apache.http.HttpEntity;
@@ -32,10 +33,12 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
 import org.graylog2.Configuration;
-import org.graylog2.Core;
 import org.graylog2.ServerVersion;
 import org.graylog2.notifications.Notification;
+import org.graylog2.notifications.NotificationService;
 import org.graylog2.plugin.Version;
+import org.graylog2.plugin.periodical.Periodical;
+import org.graylog2.shared.ServerStatus;
 import org.graylog2.versioncheck.VersionCheckResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,15 +55,26 @@ import java.nio.charset.Charset;
 public class VersionCheckThread extends Periodical {
 
     private static final Logger LOG = LoggerFactory.getLogger(VersionCheckThread.class);
+    private final NotificationService notificationService;
+    private final ServerStatus serverStatus;
+    private final Configuration configuration;
+
+    @Inject
+    public VersionCheckThread(NotificationService notificationService,
+                              ServerStatus serverStatus,
+                              Configuration configuration) {
+        this.notificationService = notificationService;
+        this.serverStatus = serverStatus;
+        this.configuration = configuration;
+    }
 
     @Override
     public void run() {
         final URIBuilder uri;
         final HttpGet get;
         try {
-            final Configuration config = core.getConfiguration();
-            uri = new URIBuilder(config.getVersionchecksUri());
-            uri.addParameter("anonid", DigestUtils.sha256Hex(core.getNodeId()));
+            uri = new URIBuilder(configuration.getVersionchecksUri());
+            uri.addParameter("anonid", DigestUtils.sha256Hex(serverStatus.getNodeId().toString()));
             uri.addParameter("version", ServerVersion.VERSION.toString());
 
             get = new HttpGet(uri.build());
@@ -78,14 +92,14 @@ public class VersionCheckThread extends Periodical {
                     .setConnectTimeout(10000)
                     .setSocketTimeout(10000)
                     .setConnectionRequestTimeout(10000);
-            if (config.getHttpProxyUri() != null) {
+            if (configuration.getHttpProxyUri() != null) {
                 try {
-                    final URIBuilder uriBuilder = new URIBuilder(config.getHttpProxyUri());
+                    final URIBuilder uriBuilder = new URIBuilder(configuration.getHttpProxyUri());
                     final URI proxyURI = uriBuilder.build();
 
                     configBuilder.setProxy(new HttpHost(proxyURI.getHost(), proxyURI.getPort(), proxyURI.getScheme()));
                 } catch (Exception e) {
-                    LOG.error("Invalid version check proxy URI: " + config.getHttpProxyUri(), e);
+                    LOG.error("Invalid version check proxy URI: " + configuration.getHttpProxyUri(), e);
                     return;
                 }
             }
@@ -116,17 +130,17 @@ public class VersionCheckThread extends Periodical {
 
             LOG.debug("Version check reports current version: " + parsedResponse);
 
-            if (reportedVersion.greaterMinor(Core.GRAYLOG2_VERSION)) {
-                LOG.debug("Reported version is higher than ours ({}). Writing notification.", Core.GRAYLOG2_VERSION);
+            if (reportedVersion.greaterMinor(ServerVersion.VERSION)) {
+                LOG.debug("Reported version is higher than ours ({}). Writing notification.", ServerVersion.VERSION);
 
-                Notification.buildNow(core)
+                Notification notification = notificationService.buildNow()
                         .addSeverity(Notification.Severity.NORMAL)
                         .addType(Notification.Type.OUTDATED_VERSION)
-                        .addDetail("current_version", parsedResponse.toString())
-                        .publishIfFirst();
+                        .addDetail("current_version", parsedResponse.toString());
+                notificationService.publishIfFirst(notification);
             } else {
-                LOG.debug("Reported version is not higher than ours ({}).", Core.GRAYLOG2_VERSION);
-                Notification.fixed(core, Notification.Type.OUTDATED_VERSION);
+                LOG.debug("Reported version is not higher than ours ({}).", ServerVersion.VERSION);
+                notificationService.fixed(Notification.Type.OUTDATED_VERSION);
             }
 
             EntityUtils.consume(entity);
@@ -166,7 +180,7 @@ public class VersionCheckThread extends Periodical {
 
     @Override
     public boolean startOnThisNode() {
-        return core.getConfiguration().isVersionchecks() && !core.isLocalMode();
+        return configuration.isVersionchecks() && !serverStatus.hasCapability(ServerStatus.Capability.LOCALMODE);
     }
 
     @Override

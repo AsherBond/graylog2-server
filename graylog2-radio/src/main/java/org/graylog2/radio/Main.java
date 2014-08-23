@@ -1,5 +1,5 @@
-/**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
+/*
+ * Copyright 2012-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -15,8 +15,8 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
+
 package org.graylog2.radio;
 
 import com.beust.jcommander.JCommander;
@@ -27,32 +27,35 @@ import com.github.joschi.jadconfig.JadConfig;
 import com.github.joschi.jadconfig.RepositoryException;
 import com.github.joschi.jadconfig.ValidationException;
 import com.github.joschi.jadconfig.repositories.PropertiesRepository;
-import org.apache.commons.io.IOUtils;
+import com.google.common.collect.Lists;
+import com.google.common.util.concurrent.MoreExecutors;
+import com.google.common.util.concurrent.ServiceManager;
+import com.google.inject.Guice;
+import com.google.inject.Injector;
+import com.google.inject.Module;
 import org.apache.log4j.Level;
-import org.graylog2.inputs.gelf.http.GELFHttpInput;
-import org.graylog2.inputs.gelf.tcp.GELFTCPInput;
-import org.graylog2.inputs.gelf.udp.GELFUDPInput;
-import org.graylog2.inputs.misc.jsonpath.JsonPathInput;
-import org.graylog2.inputs.misc.metrics.LocalMetricsInput;
-import org.graylog2.inputs.random.FakeHttpMessageInput;
-import org.graylog2.inputs.raw.tcp.RawTCPInput;
-import org.graylog2.inputs.raw.udp.RawUDPInput;
-import org.graylog2.inputs.syslog.tcp.SyslogTCPInput;
-import org.graylog2.inputs.syslog.udp.SyslogUDPInput;
+import org.graylog2.plugin.Plugin;
+import org.graylog2.plugin.PluginModule;
 import org.graylog2.plugin.Tools;
 import org.graylog2.plugin.lifecycles.Lifecycle;
+import org.graylog2.radio.bindings.RadioBindings;
+import org.graylog2.radio.bindings.RadioInitializerBindings;
+import org.graylog2.shared.NodeRunner;
+import org.graylog2.shared.ServerStatus;
+import org.graylog2.shared.bindings.GuiceInstantiationService;
+import org.graylog2.shared.initializers.ServiceManagerListener;
+import org.graylog2.shared.plugins.PluginLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.bridge.SLF4JBridgeHandler;
 
 import java.io.File;
-import java.io.FileWriter;
-import java.io.Writer;
+import java.util.List;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
  */
-public class Main {
+public class Main extends NodeRunner {
 
     private static final Logger LOG = LoggerFactory.getLogger(Main.class);
 
@@ -79,19 +82,7 @@ public class Main {
         String configFile = commandLineArguments.getConfigFile();
         LOG.info("Using config file: {}", configFile);
 
-        final Configuration configuration = new Configuration();
-        JadConfig jadConfig = new JadConfig(new PropertiesRepository(configFile), configuration);
-
-        LOG.info("Loading configuration");
-        try {
-            jadConfig.process();
-        } catch (RepositoryException e) {
-            LOG.error("Couldn't load configuration file: [{}]", configFile, e);
-            System.exit(1);
-        } catch (ValidationException e) {
-            LOG.error("Invalid configuration", e);
-            System.exit(1);
-        }
+        final Configuration configuration = getConfiguration(configFile);
 
         // Are we in debug mode?
         Level logLevel = Level.INFO;
@@ -100,8 +91,24 @@ public class Main {
             logLevel = Level.DEBUG;
         }
 
+        PluginLoader pluginLoader = new PluginLoader(new File(configuration.getPluginDir()));
+        List<PluginModule> pluginModules = Lists.newArrayList();
+        for (Plugin plugin : pluginLoader.loadPlugins())
+            pluginModules.addAll(plugin.modules());
+
+        LOG.debug("Loaded modules: " + pluginModules);
+
+        GuiceInstantiationService instantiationService = new GuiceInstantiationService();
+        List<Module> bindingsModules = getBindingsModules(instantiationService,
+                new RadioBindings(configuration),
+                new RadioInitializerBindings());
+        LOG.debug("Adding plugin modules: " + pluginModules);
+        bindingsModules.addAll(pluginModules);
+        Injector injector = Guice.createInjector(bindingsModules);
+        instantiationService.setInjector(injector);
+
         // This is holding all our metrics.
-        final MetricRegistry metrics = new MetricRegistry();
+        final MetricRegistry metrics = injector.getInstance(MetricRegistry.class);
 
         // Report metrics via JMX.
         final JmxReporter reporter = JmxReporter.forRegistry(metrics).build();
@@ -116,65 +123,24 @@ public class Main {
         SLF4JBridgeHandler.removeHandlersForRootLogger();
         SLF4JBridgeHandler.install();
 
-        LOG.info("Graylog2 Radio {} starting up. (JRE: {})", Radio.VERSION, Tools.getSystemInformation());
+        LOG.info("Graylog2 Radio {} starting up. (JRE: {})", RadioVersion.VERSION, Tools.getSystemInformation());
 
         // Do not use a PID file if the user requested not to
         if (!commandLineArguments.isNoPidFile()) {
             savePidFile(commandLineArguments.getPidFile());
         }
 
-        Radio radio = new Radio();
-        radio.setLifecycle(Lifecycle.STARTING);
+        ServerStatus serverStatus = injector.getInstance(ServerStatus.class);
 
-        try {
-            radio.initialize(configuration, metrics);
-        } catch(Exception e) {
-            LOG.error("Initialization error.", e);
-            System.exit(1);
-        }
+        monkeyPatchHK2(injector);
 
-        // Register in Graylog2 cluster.
-        radio.ping();
+        serverStatus.setLifecycle(Lifecycle.STARTING);
 
-        // Start regular pinging Graylog2 cluster to show that we are alive.
-        radio.startPings();
+        final ServiceManager serviceManager = injector.getInstance(ServiceManager.class);
+        final ServiceManagerListener serviceManagerListener = injector.getInstance(ServiceManagerListener.class);
+        serviceManager.addListener(serviceManagerListener, MoreExecutors.sameThreadExecutor());
+        serviceManager.startAsync().awaitHealthy();
 
-        // Start REST API.
-        try {
-            radio.startRestApi();
-        } catch(Exception e) {
-            LOG.error("Could not start REST API on <{}>. Terminating.", configuration.getRestListenUri(), e);
-            System.exit(1);
-        }
-
-        // Try loading persisted inputs. Retry until server connection succeeds.
-        while(true) {
-            try {
-                radio.launchPersistedInputs();
-                break;
-            } catch(Exception e) {
-                LOG.error("Could not load persisted inputs. Trying again in one second.", e);
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e1) {
-                    return;
-                }
-            }
-        }
-
-        // Register inputs. (find an automatic way here (annotations?) and do the same in graylog2-server.Main
-        radio.inputs().register(SyslogUDPInput.class, SyslogUDPInput.NAME);
-        radio.inputs().register(SyslogTCPInput.class, SyslogTCPInput.NAME);
-        radio.inputs().register(RawUDPInput.class, RawUDPInput.NAME);
-        radio.inputs().register(RawTCPInput.class, RawTCPInput.NAME);
-        radio.inputs().register(GELFUDPInput.class, GELFUDPInput.NAME);
-        radio.inputs().register(GELFTCPInput.class, GELFTCPInput.NAME);
-        radio.inputs().register(GELFHttpInput.class, GELFHttpInput.NAME);
-        radio.inputs().register(FakeHttpMessageInput.class, FakeHttpMessageInput.NAME);
-        radio.inputs().register(LocalMetricsInput.class, LocalMetricsInput.NAME);
-        radio.inputs().register(JsonPathInput.class, JsonPathInput.NAME);
-
-        radio.setLifecycle(Lifecycle.RUNNING);
         LOG.info("Graylog2 Radio up and running.");
 
         while (true) {
@@ -182,26 +148,35 @@ public class Main {
         }
     }
 
-    private static void savePidFile(String pidFile) {
+    private static Configuration getConfiguration(String configFile) {
+        final Configuration configuration = new Configuration();
+        JadConfig jadConfig = new JadConfig(new PropertiesRepository(configFile), configuration);
 
-        String pid = Tools.getPID();
-        Writer pidFileWriter = null;
-
+        LOG.info("Loading configuration");
         try {
-            if (pid == null || pid.isEmpty() || pid.equals("unknown")) {
-                throw new Exception("Could not determine PID.");
+            jadConfig.process();
+        } catch (RepositoryException e) {
+            LOG.error("Couldn't load configuration file: [{}]", configFile, e);
+            System.exit(1);
+        } catch (ValidationException e) {
+            LOG.error("Invalid configuration", e);
+            System.exit(1);
+        }
+
+        if (configuration.getRestTransportUri() == null) {
+            String guessedIf;
+            try {
+                guessedIf = Tools.guessPrimaryNetworkAddress().getHostAddress();
+            } catch (Exception e) {
+                LOG.error("Could not guess primary network address for rest_transport_uri. Please configure it in your graylog2-radio.conf.", e);
+                throw new RuntimeException("No rest_transport_uri.");
             }
 
-            pidFileWriter = new FileWriter(pidFile);
-            IOUtils.write(pid, pidFileWriter);
-        } catch (Exception e) {
-            LOG.error("Could not write PID file: " + e.getMessage(), e);
-            System.exit(1);
-        } finally {
-            IOUtils.closeQuietly(pidFileWriter);
-            // make sure to remove our pid when we exit
-            new File(pidFile).deleteOnExit();
+            String transportStr = "http://" + guessedIf + ":" + configuration.getRestListenUri().getPort();
+            LOG.info("No rest_transport_uri set. Falling back to [{}].", transportStr);
+            configuration.setRestTransportUri(transportStr);
         }
-    }
 
+        return configuration;
+    }
 }

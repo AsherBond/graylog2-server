@@ -1,5 +1,5 @@
 /*
- * Copyright 2013 TORCH GmbH
+ * Copyright 2012-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -25,12 +25,13 @@ import org.apache.directory.ldap.client.api.LdapNetworkConnection;
 import org.apache.shiro.authc.*;
 import org.apache.shiro.authc.credential.AllowAllCredentialsMatcher;
 import org.apache.shiro.realm.AuthenticatingRealm;
-import org.graylog2.Core;
 import org.graylog2.security.TrustAllX509TrustManager;
 import org.graylog2.security.ldap.LdapConnector;
 import org.graylog2.security.ldap.LdapEntry;
 import org.graylog2.security.ldap.LdapSettings;
+import org.graylog2.security.ldap.LdapSettingsService;
 import org.graylog2.users.User;
+import org.graylog2.users.UserService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,17 +41,17 @@ import java.util.concurrent.atomic.AtomicReference;
 public class LdapUserAuthenticator extends AuthenticatingRealm {
     private static final Logger log = LoggerFactory.getLogger(LdapUserAuthenticator.class);
 
-    private final Core core;
     private final LdapConnector ldapConnector;
 
-    private AtomicReference<LdapSettings> settings;
+    private final AtomicReference<LdapSettings> settings;
+    private final UserService userService;
 
-    public LdapUserAuthenticator(Core core, LdapConnector ldapConnector) {
-        this.core = core;
+    public LdapUserAuthenticator(LdapConnector ldapConnector, LdapSettingsService ldapSettingsService, UserService userService) {
         this.ldapConnector = ldapConnector;
+        this.userService = userService;
         setAuthenticationTokenClass(UsernamePasswordToken.class);
         setCredentialsMatcher(new AllowAllCredentialsMatcher());
-        settings = new AtomicReference<LdapSettings>(LdapSettings.load(core));
+        this.settings = new AtomicReference<LdapSettings>(ldapSettingsService.load());
     }
 
     @Override
@@ -99,7 +100,7 @@ public class LdapUserAuthenticator extends AuthenticatingRealm {
                 return null;
             }
             // user found and authenticated, sync the user entry with mongodb
-            final User user = User.syncFromLdapEntry(core, userEntry, ldapSettings, principal);
+            final User user = userService.syncFromLdapEntry(userEntry, ldapSettings, principal);
             if (user == null) {
                 // in case there was an error reading, creating or modifying the user in mongodb, we do not authenticate the user.
                 log.error("Unable to sync LDAP user {}", userEntry.getDn());

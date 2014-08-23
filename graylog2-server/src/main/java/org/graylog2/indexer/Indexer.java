@@ -1,3 +1,22 @@
+/*
+ * Copyright 2012-2014 TORCH GmbH
+ *
+ * This file is part of Graylog2.
+ *
+ * Graylog2 is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Graylog2 is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 package org.graylog2.indexer;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -7,7 +26,6 @@ import com.google.common.base.Splitter;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.ning.http.client.AsyncHttpClient;
-import com.ning.http.client.AsyncHttpClientConfig;
 import com.ning.http.client.ListenableFuture;
 import com.ning.http.client.Response;
 import org.apache.commons.io.FileUtils;
@@ -29,7 +47,6 @@ import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.node.Node;
 import org.elasticsearch.node.NodeBuilder;
 import org.graylog2.Configuration;
-import org.graylog2.Core;
 import org.graylog2.UI;
 import org.graylog2.indexer.cluster.Cluster;
 import org.graylog2.indexer.counts.Counts;
@@ -37,7 +54,6 @@ import org.graylog2.indexer.indices.Indices;
 import org.graylog2.indexer.messages.Messages;
 import org.graylog2.indexer.searches.Searches;
 import org.graylog2.plugin.Message;
-import org.graylog2.plugin.indexer.MessageGateway;
 import org.joda.time.Period;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,11 +74,15 @@ import static org.elasticsearch.node.NodeBuilder.nodeBuilder;
 public class Indexer {
     private static final Logger LOG = LoggerFactory.getLogger(Indexer.class);
 
+    private final Configuration configuration;
+    private final Searches.Factory searchesFactory;
+    private final Counts.Factory countsFactory;
+    private final Cluster.Factory clusterFactory;
+    private final Indices.Factory indicesFactory;
     private final AsyncHttpClient httpClient;
 
     private Client client;
     private Node node;
-    private MessageGateway messageGateway;
     public static final String TYPE = "message";
     
     private Searches searches;
@@ -72,8 +92,6 @@ public class Indexer {
     private Indices indices;
 
     private LinkedBlockingQueue<List<DeadLetter>> deadLetterQueue;
-
-    private Core server;
 
     public static enum DateHistogramInterval {
         YEAR(Period.years(1)),
@@ -95,17 +113,24 @@ public class Indexer {
         }
     }
 
-    public Indexer(Core graylogServer) {
-        this.server = graylogServer;
+    public Indexer(Configuration configuration,
+                   Searches.Factory searchesFactory,
+                   Counts.Factory countsFactory,
+                   Cluster.Factory clusterFactory,
+                   Indices.Factory indicesFactory,
+                   AsyncHttpClient httpClient) {
+        this.configuration = configuration;
+        this.searchesFactory = searchesFactory;
+        this.countsFactory = countsFactory;
+        this.clusterFactory = clusterFactory;
+        this.indicesFactory = indicesFactory;
+        this.httpClient = httpClient;
         this.deadLetterQueue = new LinkedBlockingQueue<List<DeadLetter>>(1000);
-        AsyncHttpClientConfig.Builder builder = new AsyncHttpClientConfig.Builder();
-        builder.setAllowPoolingConnection(false);
-        this.httpClient = new AsyncHttpClient(builder.build());
     }
 
     public void start() {
         final NodeBuilder builder = nodeBuilder().client(true);
-        Map<String, String> settings = readNodeSettings(server.getConfiguration());
+        Map<String, String> settings = readNodeSettings(configuration);
 
         builder.settings().put(settings);
         node = builder.node();
@@ -115,51 +140,48 @@ public class Indexer {
             client.admin().cluster().health(new ClusterHealthRequest().waitForYellowStatus()).actionGet(5, SECONDS);
         } catch(ElasticSearchTimeoutException e) {
             final String hosts = node.settings().get("discovery.zen.ping.unicast.hosts");
+            final Iterable<String> hostList = Splitter.on(',').split(hosts);
 
-            if (hosts != null && hosts.contains(",")) {
-                final Iterable<String> hostList = Splitter.on(',').split(hosts);
+            // if no elasticsearch running
+            for (String host : hostList) {
+                // guess that elasticsearch http is listening on port 9200
+                final Iterable<String> hostAndPort = Splitter.on(':').limit(2).split(host);
+                final Iterator<String> it = hostAndPort.iterator();
+                final String ip = it.next();
+                LOG.info("Checking Elasticsearch HTTP API at http://{}:9200/", ip);
 
-                // if no elasticsearch running
-                for (String host : hostList) {
-                    // guess that elasticsearch http is listening on port 9200
-                    final Iterable<String> hostAndPort = Splitter.on(':').limit(2).split(host);
-                    final Iterator<String> it = hostAndPort.iterator();
-                    final String ip = it.next();
-                    LOG.info("Checking Elasticsearch HTTP API at http://{}:9200/", ip);
+                try {
+                    // Try the HTTP API endpoint
+                    final ListenableFuture<Response> future = httpClient.prepareGet("http://" + ip + ":9200/_nodes").execute();
+                    final Response response = future.get();
 
-                    try {
-                        // Try the HTTP API endpoint
-                        final ListenableFuture<Response> future = httpClient.prepareGet("http://" + ip + ":9200/_nodes").execute();
-                        final Response response = future.get();
+                    final JsonNode resultTree = new ObjectMapper().readTree(response.getResponseBody());
+                    final String clusterName = resultTree.get("cluster_name").textValue();
+                    final JsonNode nodesList = resultTree.get("nodes");
 
-                        final JsonNode resultTree = new ObjectMapper().readTree(response.getResponseBody());
-                        final String clusterName = resultTree.get("cluster_name").textValue();
-                        final JsonNode nodesList = resultTree.get("nodes");
-
-                        final Iterator<String> nodes = nodesList.fieldNames();
-                        while (nodes.hasNext()) {
-                            final String id = nodes.next();
-                            final String version = nodesList.get(id).get("version").textValue();
-                            if (!Version.CURRENT.toString().equals(version)) {
-                                LOG.error("Elasticsearch node is of the wrong version {}, it must be {}! " +
-                                                  "Please make sure you are running the correct version of ElasticSearch.",
-                                          version,
-                                          Version.CURRENT.toString());
-                            }
-                            if (!node.settings().get("cluster.name").equals(clusterName)) {
-                                LOG.error("Elasticsearch cluster name is different, Graylog2 uses `{}`, Elasticsearch cluster uses `{}`. " +
-                                                  "Please check the `cluster.name` setting of both Graylog2 and ElasticSearch.",
-                                          node.settings().get("cluster.name"), clusterName);
-                            }
-
+                    final Iterator<String> nodes = nodesList.fieldNames();
+                    while (nodes.hasNext()) {
+                        final String id = nodes.next();
+                        final String version = nodesList.get(id).get("version").textValue();
+                        if (!Version.CURRENT.toString().equals(version)) {
+                            LOG.error("Elasticsearch node is of the wrong version {}, it must be {}! " +
+                                              "Please make sure you are running the correct version of ElasticSearch.",
+                                      version,
+                                      Version.CURRENT.toString());
                         }
-                    } catch (IOException ioException) {
-                        LOG.error("Could not connect to Elasticsearch.", ioException);
-                    } catch (InterruptedException ignore) {
-                    } catch (ExecutionException e1) {
-                       // could not find any server on that address
-                       LOG.error("Could not connect to Elasticsearch at http://" + ip + ":9200/, is it running?" , e1.getCause());
+                        if (!node.settings().get("cluster.name").equals(clusterName)) {
+                            LOG.error("Elasticsearch cluster name is different, Graylog2 uses `{}`, Elasticsearch cluster uses `{}`. " +
+                                              "Please check the `cluster.name` setting of both Graylog2 and ElasticSearch.",
+                                      node.settings().get("cluster.name"), clusterName);
+                        }
+
                     }
+                } catch (IOException ioException) {
+                    LOG.error("Could not connect to Elasticsearch.", ioException);
+                } catch (InterruptedException ignore) {
+                } catch (ExecutionException e1) {
+                   // could not find any server on that address
+                   LOG.error("Could not connect to Elasticsearch at http://" + ip + ":9200/, is it running?" , e1.getCause());
                 }
             }
 
@@ -168,12 +190,11 @@ public class Indexer {
                                 new String[]{"graylog2-server/configuring-and-tuning-elasticsearch-for-graylog2-v0200"});
         }
 
-        messageGateway = new MessageGatewayImpl(server);
-        searches = new Searches(client, server);
-        counts = new Counts(client, server);
-        messages = new Messages(client, server);
-        cluster = new Cluster(client, server);
-        indices = new Indices(client, server);
+        searches = searchesFactory.create(client);
+        counts = countsFactory.create(client);
+        messages = new Messages(client);
+        cluster = clusterFactory.create(client);
+        indices = indicesFactory.create(client);
     }
 
     // default visibility for tests
@@ -223,10 +244,6 @@ public class Indexer {
 
     public Client getClient() {
         return client;
-    }
-
-    public MessageGateway getMessageGateway() {
-        return messageGateway;
     }
 
     public String nodeIdToName(String nodeId) {
@@ -279,7 +296,9 @@ public class Indexer {
 
         final BulkRequestBuilder request = client.prepareBulk();
         for (Message msg : messages) {
-            request.add(buildIndexRequest(Deflector.DEFLECTOR_NAME, msg.toElasticSearchObject(), msg.getId())); // Main index.
+            request.add(buildIndexRequest(Deflector.buildName(configuration.getElasticSearchIndexPrefix()),
+                                          msg.toElasticSearchObject(),
+                                          msg.getId())); // Main index.
         }
 
         request.setConsistencyLevel(WriteConsistencyLevel.ONE);
@@ -291,14 +310,14 @@ public class Indexer {
                 new Object[] { response.getItems().length, response.getTookInMillis(), response.hasFailures() });
 
         if (response.hasFailures()) {
-            propagateFailure(response.getItems(), messages);
+            propagateFailure(response.getItems(), messages, response.buildFailureMessage());
         }
 
         return !response.hasFailures();
     }
 
-    private void propagateFailure(BulkItemResponse[] items, List<Message> messages) {
-        LOG.error("Failed to index [{}] messages. Please check the index error log in your web interface for the reason.", items.length);
+    private void propagateFailure(BulkItemResponse[] items, List<Message> messages, String errorMessage) {
+        LOG.error("Failed to index [{}] messages. Please check the index error log in your web interface for the reason. Error: {}", items.length, errorMessage);
 
         // Get all failed messages.
         List<DeadLetter> deadLetters = Lists.newArrayList();

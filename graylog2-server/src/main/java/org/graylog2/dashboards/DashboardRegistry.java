@@ -1,5 +1,5 @@
-/**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
+/*
+ * Copyright 2012-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -15,32 +15,32 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
+
 package org.graylog2.dashboards;
 
 import com.google.common.collect.Maps;
-import org.graylog2.Core;
+import com.google.inject.Inject;
 
+import javax.inject.Singleton;
 import java.util.Map;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
  */
+@Singleton
 public class DashboardRegistry {
 
-    private final Core core;
+    private final DashboardService dashboardService;
+    private final Map<String, Dashboard> dashboards = Maps.newHashMap();
 
-    private Map<String, Dashboard> dashboards;
-
-    public DashboardRegistry(Core core) {
-        this.core = core;
-
-        this.dashboards = Maps.newHashMap();
+    @Inject
+    public DashboardRegistry(DashboardService dashboardService) {
+        this.dashboardService = dashboardService;
     }
 
     public void loadPersisted() {
-        for (Dashboard dashboard : Dashboard.all(core)) {
+        for (Dashboard dashboard : dashboardService.all()) {
             dashboards.put(dashboard.getId(), dashboard);
         }
     }

@@ -1,5 +1,5 @@
-/**
- * Copyright 2012 Lennart Koopmann <lennart@socketfeed.com>
+/*
+ * Copyright 2012-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -15,14 +15,15 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 
 package org.graylog2.inputs.syslog.udp;
 
+
+import com.codahale.metrics.MetricRegistry;
 import org.graylog2.inputs.network.PacketInformationDumper;
 import org.graylog2.inputs.syslog.SyslogDispatcher;
-import org.graylog2.plugin.InputHost;
+import org.graylog2.plugin.buffers.Buffer;
 import org.graylog2.plugin.configuration.Configuration;
 import org.graylog2.plugin.inputs.MessageInput;
 import org.graylog2.plugin.inputs.util.ThroughputCounter;
@@ -35,13 +36,18 @@ import org.jboss.netty.channel.Channels;
  */
 public class SyslogUDPPipelineFactory implements ChannelPipelineFactory {
 
-    private final InputHost server;
+    private final MetricRegistry metricRegistry;
+    private final Buffer processBuffer;
     private final Configuration config;
     private final MessageInput sourceInput;
     private final ThroughputCounter throughputCounter;
 
-    public SyslogUDPPipelineFactory(InputHost server, Configuration config, MessageInput sourceInput, ThroughputCounter throughputCounter) {
-        this.server = server;
+    public SyslogUDPPipelineFactory(MetricRegistry metricRegistry,
+                                    Buffer processBuffer,
+                                    Configuration config,
+                                    MessageInput sourceInput, ThroughputCounter throughputCounter) {
+        this.metricRegistry = metricRegistry;
+        this.processBuffer = processBuffer;
         this.config = config;
         this.sourceInput = sourceInput;
         this.throughputCounter = throughputCounter;
@@ -53,7 +59,7 @@ public class SyslogUDPPipelineFactory implements ChannelPipelineFactory {
 
         p.addLast("packet-meta-dumper", new PacketInformationDumper(sourceInput));
         p.addLast("traffic-counter", throughputCounter);
-        p.addLast("handler", new SyslogDispatcher(server, config, sourceInput));
+        p.addLast("handler", new SyslogDispatcher(metricRegistry, processBuffer, config, sourceInput));
         
         return p;
     }

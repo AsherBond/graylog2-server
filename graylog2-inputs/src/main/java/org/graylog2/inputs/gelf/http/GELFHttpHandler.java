@@ -1,5 +1,5 @@
-/**
- * Copyright 2012 Kay Roepke <kroepke@googlemail.com>
+/*
+ * Copyright 2012-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -15,14 +15,14 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.inputs.gelf.http;
 
 import com.codahale.metrics.Meter;
+import com.codahale.metrics.MetricRegistry;
 import org.graylog2.inputs.gelf.gelf.GELFMessage;
 import org.graylog2.inputs.gelf.gelf.GELFProcessor;
-import org.graylog2.plugin.InputHost;
+import org.graylog2.plugin.buffers.Buffer;
 import org.graylog2.plugin.inputs.MessageInput;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.channel.*;
@@ -44,13 +44,14 @@ public class GELFHttpHandler extends SimpleChannelHandler {
 
     private final GELFProcessor gelfProcessor;
 
-    public GELFHttpHandler(InputHost server, MessageInput sourceInput) {
-        this.gelfProcessor = new GELFProcessor(server);
-
+    public GELFHttpHandler(MetricRegistry metricRegistry,
+                           Buffer processBuffer,
+                           MessageInput sourceInput) {
+        this.gelfProcessor = new GELFProcessor(metricRegistry, processBuffer);
         this.sourceInput = sourceInput;
 
-        this.receivedMessages = server.metrics().meter(name(GELFHttpHandler.class, "receivedMessages"));
-        this.gelfMessages = server.metrics().meter(name(GELFHttpHandler.class, "gelfMessages"));
+        this.receivedMessages = metricRegistry.meter(name(GELFHttpHandler.class, "receivedMessages"));
+        this.gelfMessages = metricRegistry.meter(name(GELFHttpHandler.class, "gelfMessages"));
     }
 
     @Override

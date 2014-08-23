@@ -1,5 +1,5 @@
-/**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
+/*
+ * Copyright 2012-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -15,24 +15,28 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
+
 package org.graylog2.rest.resources.system.inputs;
 
 import com.codahale.metrics.annotation.Timed;
 import org.apache.shiro.authz.annotation.RequiresAuthentication;
 import org.graylog2.database.ValidationException;
 import org.graylog2.inputs.Input;
+import org.graylog2.inputs.InputService;
 import org.graylog2.plugin.Message;
 import org.graylog2.plugin.inputs.MessageInput;
 import org.graylog2.rest.documentation.annotations.*;
 import org.graylog2.rest.resources.RestResource;
 import org.graylog2.rest.resources.system.inputs.requests.CreateStaticFieldRequest;
 import org.graylog2.security.RestPermissions;
+import org.graylog2.shared.inputs.InputRegistry;
 import org.graylog2.system.activities.Activity;
+import org.graylog2.system.activities.ActivityWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
@@ -47,6 +51,13 @@ import java.io.IOException;
 public class StaticFieldsResource extends RestResource {
 
     private static final Logger LOG = LoggerFactory.getLogger(StaticFieldsResource.class);
+
+    @Inject
+    private InputService inputService;
+    @Inject
+    private ActivityWriter activityWriter;
+    @Inject
+    private InputRegistry inputs;
 
     @POST
     @Timed
@@ -66,7 +77,7 @@ public class StaticFieldsResource extends RestResource {
         }
         checkPermission(RestPermissions.INPUTS_EDIT, inputId);
 
-        MessageInput input = core.inputs().getRunningInput(inputId);
+        MessageInput input = inputs.getRunningInput(inputId);
 
         if (input == null) {
             LOG.error("Input <{}> not found.", inputId);
@@ -100,9 +111,9 @@ public class StaticFieldsResource extends RestResource {
 
         input.addStaticField(csfr.key, csfr.value);
 
-        Input mongoInput = Input.find(core, input.getPersistId());
+        Input mongoInput = inputService.find(input.getPersistId());
         try {
-            mongoInput.addStaticField(csfr.key, csfr.value);
+            inputService.addStaticField(mongoInput, csfr.key, csfr.value);
         } catch (ValidationException e) {
             LOG.error("Static field persist validation failed.", e);
             throw new WebApplicationException(e, Response.Status.BAD_REQUEST);
@@ -110,7 +121,7 @@ public class StaticFieldsResource extends RestResource {
 
         String msg = "Added static field [" + csfr.key + "] to input <" + inputId + ">.";
         LOG.info(msg);
-        core.getActivityWriter().write(new Activity(msg, StaticFieldsResource.class));
+        activityWriter.write(new Activity(msg, StaticFieldsResource.class));
 
         return Response.status(Response.Status.CREATED).build();
     }
@@ -133,7 +144,7 @@ public class StaticFieldsResource extends RestResource {
         }
         checkPermission(RestPermissions.INPUTS_EDIT, inputId);
 
-        MessageInput input = core.inputs().getRunningInput(inputId);
+        MessageInput input = inputs.getRunningInput(inputId);
 
         if (input == null) {
             LOG.error("Input <{}> not found.", inputId);
@@ -147,12 +158,12 @@ public class StaticFieldsResource extends RestResource {
 
         input.getStaticFields().remove(key);
 
-        Input mongoInput = Input.find(core, input.getPersistId());
-        mongoInput.removeStaticField(key);
+        Input mongoInput = inputService.find(input.getPersistId());
+        inputService.removeStaticField(mongoInput, key);
 
         String msg = "Removed static field [" + key + "] of input <" + inputId + ">.";
         LOG.info(msg);
-        core.getActivityWriter().write(new Activity(msg, StaticFieldsResource.class));
+        activityWriter.write(new Activity(msg, StaticFieldsResource.class));
 
         return Response.status(Response.Status.NO_CONTENT).build();
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2013 TORCH GmbH
+ * Copyright 2012-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -16,6 +16,7 @@
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
  */
+
 package org.graylog2.rest.resources.system;
 
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
@@ -34,10 +35,12 @@ import org.graylog2.rest.documentation.annotations.ApiParam;
 import org.graylog2.rest.resources.RestResource;
 import org.graylog2.security.ShiroSecurityContext;
 import org.graylog2.users.User;
+import org.graylog2.users.UserService;
 import org.joda.time.DateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import javax.ws.rs.*;
 import javax.ws.rs.container.ContainerRequestContext;
 import javax.ws.rs.core.Context;
@@ -53,6 +56,16 @@ import static javax.ws.rs.core.Response.noContent;
 @Api(value = "System/Sessions", description = "Login for interactive user sessions")
 public class SessionsResource extends RestResource {
     private static final Logger log = LoggerFactory.getLogger(SessionsResource.class);
+
+    private final UserService userService;
+    private final DefaultSecurityManager securityManager;
+
+    @Inject
+    public SessionsResource(UserService userService,
+                            DefaultSecurityManager securityManager) {
+        this.userService = userService;
+        this.securityManager = securityManager;
+    }
 
     @POST
     @ApiOperation(value = "Create a new session", notes = "This request creates a new session for a user or reactivates an existing session: the equivalent of logging in.")
@@ -76,7 +89,7 @@ public class SessionsResource extends RestResource {
 
         try {
             subject.login(new UsernamePasswordToken(createRequest.username, createRequest.password));
-            final User user = User.load(createRequest.username, core);
+            final User user = userService.load(createRequest.username);
             if (user != null) {
                 long timeoutInMillis = user.getSessionTimeoutMs();
                 subject.getSession().setTimeout(timeoutInMillis);
@@ -111,7 +124,7 @@ public class SessionsResource extends RestResource {
     @RequiresAuthentication
     public Response terminateSession(@ApiParam(title = "sessionId", required = true) @PathParam("sessionId") String sessionId) {
         final Subject subject = getSubject();
-        core.getSecurityManager().logout(subject);
+        securityManager.logout(subject);
 
         final org.apache.shiro.session.Session session = subject.getSession(false);
         if (session == null || !session.getId().equals(sessionId)) {

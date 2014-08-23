@@ -20,8 +20,11 @@
 package org.graylog2.inputs.converters;
 
 import org.graylog2.ConfigurationException;
+<<<<<<< HEAD
 import org.graylog2.plugin.Tools;
 import org.graylog2.plugin.inputs.Converter;
+=======
+>>>>>>> 84813ab619e8dba994e3cdc5b4eafd3ae75c908e
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
 import org.testng.annotations.Test;

@@ -1,5 +1,5 @@
-/**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
+/*
+ * Copyright 2013-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -13,15 +13,15 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.outputs;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
-import org.graylog2.Core;
+import org.graylog2.plugin.configuration.Configuration;
 import org.graylog2.plugin.outputs.MessageOutput;
 import org.graylog2.plugin.outputs.MessageOutputConfigurationException;
 import org.slf4j.Logger;
@@ -37,12 +37,9 @@ public class OutputRegistry {
 
     private static final Logger LOG = LoggerFactory.getLogger(OutputRegistry.class);
 
-    private final Core core;
     private List<MessageOutput> outputs;
 
-    public OutputRegistry(Core core) {
-        this.core = core;
-
+    public OutputRegistry() {
         outputs = Lists.newArrayList();
     }
 
@@ -53,7 +50,7 @@ public class OutputRegistry {
     public void initialize() {
         for(MessageOutput o : outputs) {
             try {
-                o.initialize(new HashMap<String, String>());
+                o.initialize(new Configuration(new HashMap<String, Object>()));
                 LOG.info("Initialized output <{}>.", o.getClass().getCanonicalName());
             } catch (MessageOutputConfigurationException e) {
                 LOG.error("Could not initialize output <{}>", o.getClass().getCanonicalName(), e);

@@ -1,5 +1,5 @@
-/**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
+/*
+ * Copyright 2012-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -15,18 +15,22 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.indexer.ranges;
 
 import com.beust.jcommander.internal.Lists;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.Maps;
+import com.google.inject.assistedinject.Assisted;
+import com.google.inject.assistedinject.AssistedInject;
 import org.elasticsearch.search.SearchHit;
-import org.graylog2.Core;
-import org.graylog2.system.activities.Activity;
+import org.graylog2.indexer.Deflector;
 import org.graylog2.indexer.EmptyIndexException;
+import org.graylog2.indexer.Indexer;
 import org.graylog2.plugin.Tools;
+import org.graylog2.shared.ServerStatus;
+import org.graylog2.system.activities.Activity;
+import org.graylog2.system.activities.ActivityWriter;
 import org.graylog2.system.jobs.SystemJob;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +43,9 @@ import java.util.concurrent.TimeUnit;
  * @author Lennart Koopmann <lennart@torch.sh>
  */
 public class RebuildIndexRangesJob extends SystemJob {
+    public interface Factory {
+        public RebuildIndexRangesJob create(Deflector deflector);
+    }
 
     private static final Logger LOG = LoggerFactory.getLogger(RebuildIndexRangesJob.class);
 
@@ -48,8 +55,22 @@ public class RebuildIndexRangesJob extends SystemJob {
     private int indicesToCalculate = 0;
     private int indicesCalculated = 0;
 
-    public RebuildIndexRangesJob(Core core) {
-        this.core = core;
+    private final Deflector deflector;
+    private final Indexer indexer;
+    private final ActivityWriter activityWriter;
+    private final IndexRangeService indexRangeService;
+
+    @AssistedInject
+    public RebuildIndexRangesJob(@Assisted Deflector deflector,
+                                 ServerStatus serverStatus,
+                                 Indexer indexer,
+                                 ActivityWriter activityWriter,
+                                 IndexRangeService indexRangeService) {
+        super(serverStatus);
+        this.deflector = deflector;
+        this.indexer = indexer;
+        this.activityWriter = activityWriter;
+        this.indexRangeService = indexRangeService;
     }
 
     @Override
@@ -77,7 +98,7 @@ public class RebuildIndexRangesJob extends SystemJob {
         List<Map<String, Object>> ranges = Lists.newArrayList();
         info("Re-calculating index ranges.");
 
-        String[] indices = core.getDeflector().getAllDeflectorIndexNames();
+        String[] indices = deflector.getAllDeflectorIndexNames(indexer);
         if (indices == null || indices.length == 0) {
             info("No indices, nothing to calculate.");
             return;
@@ -97,7 +118,7 @@ public class RebuildIndexRangesJob extends SystemJob {
             } catch (EmptyIndexException e) {
                 // if the empty index happens to be the current deflector target, do not skip the index range.
                 // newly created indices have a high likelihood of being empty).
-                if (core.getDeflector().getCurrentActualTargetIndex().equals(index)) {
+                if (deflector.getCurrentActualTargetIndex(indexer).equals(index)) {
                     LOG.info("Index [{}] is empty but it is the current deflector target. Inserting dummy index range.", index);
                     Map<String, Object> deflectorIndexRange = Maps.newHashMap();
                     deflectorIndexRange.put("index", index);
@@ -123,7 +144,7 @@ public class RebuildIndexRangesJob extends SystemJob {
         Map<String, Object> range = Maps.newHashMap();
 
         Stopwatch x = new Stopwatch().start();
-        SearchHit doc = core.getIndexer().searches().firstOfIndex(index);
+        SearchHit doc = indexer.searches().firstOfIndex(index);
         if (doc == null || doc.isSourceEmpty()) {
             x.stop();
             throw new EmptyIndexException();
@@ -142,15 +163,16 @@ public class RebuildIndexRangesJob extends SystemJob {
     }
 
     private void updateCollection(List<Map<String, Object>> ranges) {
-        IndexRange.destroyAll(core, IndexRange.COLLECTION);
+        indexRangeService.destroyAll();
         for (Map<String, Object> range : ranges) {
-            new IndexRange(core, range).saveWithoutValidation();
+            IndexRange indexRange = indexRangeService.create(range);
+            indexRangeService.saveWithoutValidation(indexRange);
         }
     }
 
     private void info(String what) {
         LOG.info(what);
-        core.getActivityWriter().write(new Activity(what, RebuildIndexRangesJob.class));
+        activityWriter.write(new Activity(what, RebuildIndexRangesJob.class));
     }
 
     @Override

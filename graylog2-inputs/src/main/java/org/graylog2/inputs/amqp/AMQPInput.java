@@ -21,6 +21,8 @@ package org.graylog2.inputs.amqp;
 
 import com.codahale.metrics.Gauge;
 import com.codahale.metrics.MetricRegistry;
+import com.google.inject.Inject;
+import org.graylog2.plugin.buffers.Buffer;
 import org.graylog2.plugin.configuration.Configuration;
 import org.graylog2.plugin.configuration.ConfigurationException;
 import org.graylog2.plugin.configuration.ConfigurationRequest;
@@ -43,12 +45,12 @@ public class AMQPInput extends MessageInput {
     private static final Logger LOG = LoggerFactory.getLogger(AMQPInput.class);
 
     public static final String NAME = "AMQP Input";
+    private final MetricRegistry metricRegistry;
 
     private Consumer consumer;
 
     public static final String CK_HOSTNAME = "broker_hostname";
     public static final String CK_PORT = "broker_port";
-    public static final String CK_VHOST = "broker_vhost";
     public static final String CK_USERNAME = "broker_username";
     public static final String CK_PASSWORD = "broker_password";
     public static final String CK_PREFETCH = "prefetch";
@@ -56,21 +58,24 @@ public class AMQPInput extends MessageInput {
     public static final String CK_QUEUE = "queue";
     public static final String CK_ROUTING_KEY = "routing_key";
 
+    @Inject
+    public AMQPInput(MetricRegistry metricRegistry) {
+        this.metricRegistry = metricRegistry;
+    }
     @Override
-    public void launch() throws MisfireException {
+    public void launch(Buffer processBuffer) throws MisfireException {
         setupMetrics();
 
         consumer = new Consumer(
                 configuration.getString(CK_HOSTNAME),
                 (int) configuration.getInt(CK_PORT),
-                configuration.getString(CK_VHOST),
                 configuration.getString(CK_USERNAME),
                 configuration.getString(CK_PASSWORD),
                 (int) configuration.getInt(CK_PREFETCH),
                 configuration.getString(CK_QUEUE),
                 configuration.getString(CK_EXCHANGE),
                 configuration.getString(CK_ROUTING_KEY),
-                graylogServer,
+                processBuffer,
                 this
         );
 
@@ -114,16 +119,6 @@ public class AMQPInput extends MessageInput {
                         "Port of the AMQP broker to use",
                         ConfigurationField.Optional.OPTIONAL,
                         NumberField.Attribute.IS_PORT_NUMBER
-                )
-        );
-
-        cr.addField(
-                new TextField(
-                        CK_VHOST,
-                        "Broker virtual host",
-                        "/",
-                        "Virtual host of the AMQP broker to use",
-                        ConfigurationField.Optional.NOT_OPTIONAL
                 )
         );
 
@@ -227,28 +222,28 @@ public class AMQPInput extends MessageInput {
     }
 
     private void setupMetrics() {
-        graylogServer.metrics().register(MetricRegistry.name(getUniqueReadableId(), "read_bytes_1sec"), new Gauge<Long>() {
+        metricRegistry.register(MetricRegistry.name(getUniqueReadableId(), "read_bytes_1sec"), new Gauge<Long>() {
             @Override
             public Long getValue() {
                 return consumer.getLastSecBytesRead().get();
             }
         });
 
-        graylogServer.metrics().register(MetricRegistry.name(getUniqueReadableId(), "written_bytes_1sec"), new Gauge<Long>() {
+        metricRegistry.register(MetricRegistry.name(getUniqueReadableId(), "written_bytes_1sec"), new Gauge<Long>() {
             @Override
             public Long getValue() {
                 return 0L;
             }
         });
 
-        graylogServer.metrics().register(MetricRegistry.name(getUniqueReadableId(), "read_bytes_total"), new Gauge<Long>() {
+        metricRegistry.register(MetricRegistry.name(getUniqueReadableId(), "read_bytes_total"), new Gauge<Long>() {
             @Override
             public Long getValue() {
                 return consumer.getTotalBytesRead().get();
             }
         });
 
-        graylogServer.metrics().register(MetricRegistry.name(getUniqueReadableId(), "written_bytes_total"), new Gauge<Long>() {
+        metricRegistry.register(MetricRegistry.name(getUniqueReadableId(), "written_bytes_total"), new Gauge<Long>() {
             @Override
             public Long getValue() {
                 return 0L;
